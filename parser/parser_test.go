@@ -1,4 +1,4 @@
-package goeval
+package parser
 
 import (
 	"fmt"
@@ -18,8 +18,8 @@ type A struct {
 	BB   B
 }
 
-func (a A) Test() {
-
+func (a A) Test(v float64) int {
+	return int(v)
 }
 
 func TestFunctionExpr(t *testing.T) {
@@ -32,7 +32,7 @@ func TestFunctionExpr(t *testing.T) {
 		"a": a,
 	})
 	fmt.Println("answer", answer)
-	if answer != 61.0 {
+	if answer != 62.0 {
 		t.Fatal("the answer should be 62")
 		t.Fail()
 	}
@@ -52,7 +52,6 @@ func TestSeveralAdd(t *testing.T) {
 		t.Fatal("the answer should be 16")
 	}
 }
-
 
 func TestSeveralMul(t *testing.T) {
 	a := &A{Data: "aaa", BB: B{C: 10}}
@@ -85,3 +84,47 @@ func TestComplexGroup(t *testing.T) {
 }
 
 
+func TestCmp(t *testing.T) {
+	a := &A{Data: "aaa", BB: B{C: 10}}
+	tokens := ParseExpression("0 + 1 > 3")
+	root := BuildTree(tokens)
+	fmt.Println("tokens=", tokens, root)
+	root.PrintTree(0)
+	answer := root.Execute(map[string]interface{}{
+		"a": a,
+	})
+
+	if answer != 0.0 {
+		t.Fatal("the answer should be 0")
+	}
+}
+
+
+func TestCmpObj(t *testing.T) {
+	tokens := ParseExpression("((a + 2) > 3)")
+	root := BuildTree(tokens)
+	fmt.Println("tokens=", tokens, root)
+	root.PrintTree(0)
+	answer := root.Execute(map[string]interface{}{
+		"a": 2,
+	})
+
+	if answer != 1.0 {
+		t.Fatal("the answer should be 1")
+	}
+}
+
+
+func TestCmpFunc(t *testing.T) {
+	tokens := ParseExpression("((a.Test(2) + 2) > 3)")
+	root := BuildTree(tokens)
+	fmt.Println("tokens=", tokens, root)
+	root.PrintTree(0)
+	answer := root.Execute(map[string]interface{}{
+		"a": &A{},
+	})
+
+	if answer != 1.0 {
+		t.Fatal("the answer should be 1")
+	}
+}

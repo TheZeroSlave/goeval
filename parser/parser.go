@@ -1,7 +1,8 @@
-package goeval
+package parser
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"strconv"
 	"unicode"
@@ -10,6 +11,7 @@ import (
 type token struct {
 	data      string
 	operation bool
+	cmp       bool
 	dot       bool
 	comma     bool
 	number    bool
@@ -28,6 +30,14 @@ func ParseExpression(e string) []token {
 		switch e[i] {
 		case '+', '*', '/', '-':
 			t := token{data: string(e[i]), operation: true}
+			res = append(res, t)
+			i++
+		case '>', '<', '=':
+			t := token{data: string(e[i]), cmp: true}
+			if i+1 < len(e) && e[i+1] == '=' {
+				t.data = e[i : i+1]
+				i++
+			}
 			res = append(res, t)
 			i++
 		case '(', ')':
@@ -77,6 +87,8 @@ const (
 	div   = 2
 	plus  = 3
 	minus = 4
+
+	cmp = 5
 )
 
 type node struct {
@@ -95,82 +107,101 @@ func (n *node) PrintTree(lvl int) {
 	}
 }
 
+func boolToFloat64(b bool) float64 {
+	if b {
+		return 1.0
+	}
+	return 0.0
+}
+
 func (n *node) Execute(ctx map[string]interface{}) float64 {
 	fmt.Println("val:", *n)
-	if n.t != nil {
-		if n.t.number {
-			v, err := strconv.ParseFloat(n.t.data, 64)
-			if err != nil {
-				panic(err)
+	if n.t.number {
+		fmt.Println("number")
+		v, err := strconv.ParseFloat(n.t.data, 64)
+		if err != nil {
+			panic(err)
+		}
+		return v
+	} else if n.t.name && !n.isFunction {
+		fmt.Println("func")
+		val := ctx[n.ts[0].data]
+		fmt.Println("looking for name")
+		rval := reflect.Indirect(reflect.ValueOf(val))
+		for i := 1; i < len(n.ts); i++ {
+			if !n.ts[i].dot {
+				continue
 			}
-			return v
-		} else if n.t.name && !n.isFunction {
-			val := ctx[n.ts[0].data]
-			fmt.Println("looking for name")
-			rval := reflect.Indirect(reflect.ValueOf(val))
-			for i := 1; i < len(n.ts); i++ {
-				if !n.ts[i].dot {
-					continue
-				}
-				fmt.Println("lokking for ", n.ts[i].data)
-				rval = reflect.Indirect(rval.FieldByName(n.ts[i].data))
+			fmt.Println("lokking for ", n.ts[i].data)
+			rval = reflect.Indirect(rval.FieldByName(n.ts[i].data))
+		}
+		fmt.Println("found: ", rval.Interface())
+		switch rval.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return float64(rval.Int())
+		case reflect.Float32, reflect.Float64:
+			return rval.Float()
+		}
+		panic("not valuable expression!")
+	} else if n.t.name && n.isFunction {
+		fmt.Println("found func", n.ts)
+		val := ctx[n.ts[0].data]
+		fmt.Println("looking for func name")
+		rval := reflect.Indirect(reflect.ValueOf(val))
+		for i := 1; i < len(n.ts)-1; i++ {
+			if n.ts[i].dot {
+				continue
 			}
-			fmt.Println("found: ", rval.Interface())
-			switch rval.Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				return float64(rval.Int())
-			case reflect.Float32, reflect.Float64:
-				return rval.Float()
-			}
-			panic("not valuable expression!")
-		} else if n.t.name && n.isFunction {
-			fmt.Println("found func", n.ts[0].data)
-			val := ctx[n.ts[0].data]
-			fmt.Println("looking for func name")
-			rval := reflect.Indirect(reflect.ValueOf(val))
-			for i := 1; i < len(n.ts)-1; i++ {
-				if n.ts[i].dot {
-					continue
-				}
-				fmt.Println("lokking for ", n.ts[i].data)
-				rval = reflect.Indirect(rval.FieldByName(n.ts[i].data))
-			}
-			fmt.Println("len of ts=", n.ts[len(n.ts)-1].data)
-			methodType := rval.MethodByName(n.ts[len(n.ts)-1].data)
+			fmt.Println("lokking for ", n.ts[i].data)
+			rval = reflect.Indirect(rval.FieldByName(n.ts[i].data))
+		}
+		fmt.Println("len of ts=", n.ts[len(n.ts)-1].data)
+		methodType := rval.MethodByName(n.ts[len(n.ts)-1].data)
+		if !methodType.IsValid() {
+			methodType = rval.Addr().MethodByName(n.ts[len(n.ts)-1].data)
 			if !methodType.IsValid() {
-				methodType = rval.Addr().MethodByName(n.ts[len(n.ts)-1].data)
-				if !methodType.IsValid() {
-					panic("not found")
-				}
-			}
-			vals := []reflect.Value{}
-			for _, child := range n.nodes {
-				vals = append(vals, reflect.ValueOf(child.Execute(ctx)))
-			}
-			output := methodType.Call(vals)[0]
-			fmt.Println("output", output)
-			switch output.Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				return float64(output.Int())
-			case reflect.Float32, reflect.Float64:
-				return output.Float()
+				panic("not found: " + n.ts[len(n.ts)-1].data)
 			}
 		}
-	} else {
-		arg1 := n.nodes[0].Execute(ctx)
-		if len(n.nodes) == 1 {
-			return arg1
+		vals := []reflect.Value{}
+		for _, child := range n.nodes {
+			vals = append(vals, reflect.ValueOf(child.Execute(ctx)))
 		}
-		arg2 := n.nodes[1].Execute(ctx)
-		switch n.operation {
-		case plus:
-			return arg1 + arg2
-		case minus:
-			return arg1 - arg2
-		case div:
-			return arg1 / arg2
-		case mul:
-			return arg1 * arg2
+		output := methodType.Call(vals)[0]
+		switch output.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return float64(output.Int())
+		case reflect.Float32, reflect.Float64:
+			return output.Float()
+		}
+	}
+	arg1 := n.nodes[0].Execute(ctx)
+	if len(n.nodes) == 1 {
+		return arg1
+	}
+	arg2 := n.nodes[1].Execute(ctx)
+	switch n.operation {
+	case plus:
+		return arg1 + arg2
+	case minus:
+		return arg1 - arg2
+	case div:
+		return arg1 / arg2
+	case mul:
+		return arg1 * arg2
+	case cmp:
+		switch n.t.data {
+		case ">":
+			//fmt.Println("arg1", arg1, "arg2", arg2)
+			return boolToFloat64(arg1 > arg2)
+		case ">=":
+			return boolToFloat64(arg1 >= arg2)
+		case "<":
+			return boolToFloat64(arg1 < arg2)
+		case "<=":
+			return boolToFloat64(arg1 <= arg2)
+		case "==":
+			return boolToFloat64(arg1 == arg2)
 		}
 	}
 	return 0.0
@@ -186,18 +217,49 @@ func getOp(s string) int {
 		return mul
 	case "/":
 		return div
+	case ">", "<", "==", ">=", "<=":
+		return cmp
 	}
 	return none
 }
 
 /*
-e : p + e
+pr: (g || pr)
+e : p + e (>e)
 p: f * p
 f: [0-9]
 f: [a-z]
 f: [a-z].[a-z](e, e, ...)
 f: (e)
 */
+
+func group(tokens []token, c int) (*node, int) {
+	traceId := rand.Int()
+	fmt.Println("enter to group", c)
+	if c >= len(tokens) {
+		return nil, c
+	}
+	fmt.Println("call expr1", c, traceId)
+	e1, c := expr(tokens, c)
+	fmt.Println("get answer from expr ", traceId)
+	if c >= len(tokens) || !tokens[c].cmp {
+		return e1, c
+	}
+	root := &node{
+		ctx:       "group",
+		operation: getOp(tokens[c].data),
+		t:         &tokens[c],
+	}
+	c++
+	fmt.Println("call another group ", traceId)
+	e2, c := expr(tokens, c)
+	if e2 == nil {
+		panic("nothing to compare with")
+	}
+	root.nodes = append(root.nodes, e1, e2)
+	fmt.Println("return from group ", c, traceId)
+	return root, c
+}
 
 func factor(tokens []token, c int) (*node, int) {
 	if c >= len(tokens) {
@@ -211,40 +273,47 @@ func factor(tokens []token, c int) (*node, int) {
 			ctx:       "factor-number",
 		}, c + 1
 	} else if tokens[c].name {
-		start := c
+		startNameC := c
 		n := &node{
 			t:   &tokens[c],
 			ctx: "name",
 		}
+		fmt.Println("choose naming", tokens[c], c)
 		for c < len(tokens) && (tokens[c].name || tokens[c].dot) {
 			c++
 		}
+		fmt.Println("choose naming end", tokens[c], c)
+		endNameC := startNameC
 		if c < len(tokens) && tokens[c].data == "(" {
+			endNameC = c
 			fmt.Println("finding args func", c, tokens[c].data)
 			n.isFunction = true
 			for {
 				e, c2 := expr(tokens, c+1)
+				c = c2
 				if e == nil {
 					break
 				}
-				c = c2
 				n.nodes = append(n.nodes, e)
 				if !tokens[c].comma {
 					break
 				}
 			}
+			fmt.Println("chosed name", c, tokens[c].data)
 			if tokens[c].data != ")" {
 				panic("not closed bracket in func")
 			}
-			fmt.Println("here ", c, tokens[c].data, tokens[c-1].data)
-			n.ts = tokens[start : c-2]
+			fmt.Println("here ", c, tokens[startNameC: endNameC])
+			n.ts = tokens[startNameC : endNameC]
 			return n, c + 1
 		} else {
-			n.ts = tokens[start:c]
-			return n, c + 1
+			n.ts = tokens[startNameC:c]
+			fmt.Println("return naming", tokens[c].data, c)
+			return n, c
 		}
 	} else if tokens[c].grouping && tokens[c].data == "(" {
-		n, c := expr(tokens, c+1)
+		fmt.Println("call group from factor", tokens[c], c)
+		n, c := group(tokens, c+1)
 		if tokens[c].data != ")" {
 			panic("not closed bracket...")
 		}
@@ -272,6 +341,7 @@ func product(tokens []token, c int) (*node, int) {
 	if c < len(tokens) {
 		if tokens[c].operation && (tokens[c].data == "*" || tokens[c].data == "/") {
 			root.operation = getOp(tokens[c].data)
+			root.t = &tokens[c]
 			c++
 		} else {
 			if len(root.nodes) == 1 {
@@ -291,7 +361,7 @@ func product(tokens []token, c int) (*node, int) {
 }
 
 func BuildTree(tokens []token) *node {
-	root, _ := expr(tokens, 0)
+	root, _ := group(tokens, 0)
 	return root
 }
 
@@ -304,17 +374,23 @@ func expr(tokens []token, c int) (*node, int) {
 	n1, c := product(tokens, c)
 	if n1 != nil {
 		root.nodes = append(root.nodes, n1)
+	} else {
+		fmt.Println("return ", c)
+		return nil, c
 	}
+
 	needToFindAnother := false
 	if c < len(tokens) {
 		if tokens[c].operation && (tokens[c].data == "+" || tokens[c].data == "-") {
 			root.operation = getOp(tokens[c].data)
+			root.t = &tokens[c]
 			c++
 			needToFindAnother = true
 		}
 	}
 	//	fmt.Println("needToFindAnother", needToFindAnother, tokens[c].data)
 	if needToFindAnother {
+		fmt.Println("call from expr to expr")
 		n2, c2 := expr(tokens, c)
 		if n2 != nil {
 			root.nodes = append(root.nodes, n2)
@@ -327,6 +403,3 @@ func expr(tokens []token, c int) (*node, int) {
 	}
 	return root, c
 }
-
-
-
