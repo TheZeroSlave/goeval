@@ -1,6 +1,7 @@
-package parser
+package goeval
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -8,77 +9,72 @@ import (
 	"unicode"
 )
 
-type token struct {
-	data      string
-	operation bool
-	cmp       bool
-	dot       bool
-	comma     bool
-	number    bool
-	name      bool
-	grouping  bool
-}
-
 func isLetter(c byte) bool {
 	return unicode.IsLetter(rune(c))
 }
 
-func ParseExpression(e string) []token {
+var (
+	errSingleEqual = "we found a '=' single"
+)
+
+func ParseExpression(e string) (TokenList, error) {
 	var i int
-	res := make([]token, 0)
+	res := make([]Token, 0)
+
 	for i < len(e) {
 		switch e[i] {
 		case '+', '*', '/', '-':
-			t := token{data: string(e[i]), operation: true}
+			t := Token{data: string(e[i]), operation: true}
 			res = append(res, t)
 			i++
 		case '>', '<', '=':
-			t := token{data: string(e[i]), cmp: true}
+			t := Token{data: string(e[i]), cmp: true}
+			if e[i] == '=' {
+				if i+1 >= len(e) || e[i+1] != '=' {
+					return nil, errors.New(errSingleEqual)
+				}
+			}
 			if i+1 < len(e) && e[i+1] == '=' {
 				t.data = e[i : i+1]
 				i++
 			}
 			res = append(res, t)
 			i++
-		case '(', ')':
-			t := token{data: string(e[i]), grouping: true}
-			res = append(res, t)
-			i++
-		case '.':
-			t := token{data: string(e[i]), dot: true}
-			res = append(res, t)
-			i++
-		case ',':
-			t := token{data: string(e[i]), comma: true}
+		case '(', ')', '.', ',':
+			t := Token{data: string(e[i])}
 			res = append(res, t)
 			i++
 		case ' ':
 			for i < len(e) && e[i] == ' ' && i < len(e) {
 				i++
 			}
-		}
-		if i < len(e) && e[i] >= '0' && e[i] <= '9' {
-			t := token{}
-			j := i
-			for i < len(e) && e[i] >= '0' && e[i] <= '9' {
-				i++
+		default:
+			if i < len(e) && e[i] >= '0' && e[i] <= '9' {
+				t := Token{}
+				j := i
+				for i < len(e) && e[i] >= '0' && e[i] <= '9' {
+					i++
+				}
+				t.data = e[j:i]
+				t.number = true
+				res = append(res, t)
+				continue
+			} else if i < len(e) && isLetter(e[i]) {
+				t := Token{}
+				j := i
+				for i < len(e) && isLetter(e[i]) {
+					i++
+				}
+				t.data = e[j:i]
+				t.name = true
+				res = append(res, t)
+				continue
+			} else {
+				return nil, fmt.Errorf("invalid char input %v", e[i])
 			}
-			t.data = e[j:i]
-			t.number = true
-			res = append(res, t)
-		}
-		if i < len(e) && isLetter(e[i]) {
-			t := token{}
-			j := i
-			for i < len(e) && isLetter(e[i]) {
-				i++
-			}
-			t.data = e[j:i]
-			t.name = true
-			res = append(res, t)
 		}
 	}
-	return res
+	return TokenList(res), nil
 }
 
 const (
@@ -93,8 +89,8 @@ const (
 
 type node struct {
 	operation  int
-	t          *token
-	ts         []token // in case of function
+	t          *Token
+	ts         []Token // in case of function
 	isFunction bool
 	nodes      []*node
 	ctx        string
@@ -129,7 +125,7 @@ func (n *node) Execute(ctx map[string]interface{}) float64 {
 		fmt.Println("looking for name")
 		rval := reflect.Indirect(reflect.ValueOf(val))
 		for i := 1; i < len(n.ts); i++ {
-			if !n.ts[i].dot {
+			if !n.ts[i].IsDot() {
 				continue
 			}
 			fmt.Println("lokking for ", n.ts[i].data)
@@ -149,7 +145,7 @@ func (n *node) Execute(ctx map[string]interface{}) float64 {
 		fmt.Println("looking for func name")
 		rval := reflect.Indirect(reflect.ValueOf(val))
 		for i := 1; i < len(n.ts)-1; i++ {
-			if n.ts[i].dot {
+			if n.ts[i].IsDot() {
 				continue
 			}
 			fmt.Println("lokking for ", n.ts[i].data)
@@ -233,7 +229,7 @@ f: [a-z].[a-z](e, e, ...)
 f: (e)
 */
 
-func group(tokens []token, c int) (*node, int) {
+func group(tokens []Token, c int) (*node, int) {
 	traceId := rand.Int()
 	fmt.Println("enter to group", c)
 	if c >= len(tokens) {
@@ -261,7 +257,7 @@ func group(tokens []token, c int) (*node, int) {
 	return root, c
 }
 
-func factor(tokens []token, c int) (*node, int) {
+func factor(tokens []Token, c int) (*node, int) {
 	if c >= len(tokens) {
 		return nil, c
 	}
@@ -279,7 +275,7 @@ func factor(tokens []token, c int) (*node, int) {
 			ctx: "name",
 		}
 		fmt.Println("choose naming", tokens[c], c)
-		for c < len(tokens) && (tokens[c].name || tokens[c].dot) {
+		for c < len(tokens) && (tokens[c].name || tokens[c].IsDot()) {
 			c++
 		}
 		fmt.Println("choose naming end", tokens[c], c)
@@ -295,7 +291,7 @@ func factor(tokens []token, c int) (*node, int) {
 					break
 				}
 				n.nodes = append(n.nodes, e)
-				if !tokens[c].comma {
+				if !tokens[c].IsComma() {
 					break
 				}
 			}
@@ -303,22 +299,22 @@ func factor(tokens []token, c int) (*node, int) {
 			if tokens[c].data != ")" {
 				panic("not closed bracket in func")
 			}
-			fmt.Println("here ", c, tokens[startNameC: endNameC])
-			n.ts = tokens[startNameC : endNameC]
+			fmt.Println("here ", c, tokens[startNameC:endNameC])
+			n.ts = tokens[startNameC:endNameC]
 			return n, c + 1
 		} else {
 			n.ts = tokens[startNameC:c]
 			fmt.Println("return naming", tokens[c].data, c)
 			return n, c
 		}
-	} else if tokens[c].grouping && tokens[c].data == "(" {
+	} else if tokens[c].IsGrouping() && tokens[c].data == "(" {
 		fmt.Println("call group from factor", tokens[c], c)
 		n, c := group(tokens, c+1)
 		if tokens[c].data != ")" {
 			panic("not closed bracket...")
 		}
 		return n, c + 1
-	} else if tokens[c].grouping && tokens[c].data == ")" {
+	} else if tokens[c].IsGrouping() && tokens[c].data == ")" {
 		return nil, c
 	}
 	fmt.Println("not expected to be here...", tokens[c])
@@ -326,7 +322,7 @@ func factor(tokens []token, c int) (*node, int) {
 	return nil, 0
 }
 
-func product(tokens []token, c int) (*node, int) {
+func product(tokens []Token, c int) (*node, int) {
 	if c >= len(tokens) {
 		return nil, c
 	}
@@ -360,12 +356,12 @@ func product(tokens []token, c int) (*node, int) {
 	return root, c
 }
 
-func BuildTree(tokens []token) *node {
+func BuildTree(tokens []Token) *node {
 	root, _ := group(tokens, 0)
 	return root
 }
 
-func expr(tokens []token, c int) (*node, int) {
+func expr(tokens []Token, c int) (*node, int) {
 	if c >= len(tokens) {
 		return nil, c
 	}
