@@ -1,7 +1,6 @@
 package goeval_test
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -31,13 +30,13 @@ func TestFunctionExpr(t *testing.T) {
 	tokens, err := goeval.ParseExpression("1 + (a.BB.Test(15) * 2 + 1)")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": a,
 	})
-	fmt.Println("answer", answer)
+
 	if answer != 62.0 {
 		t.Fatal("the answer should be 62")
 		t.Fail()
@@ -49,16 +48,14 @@ func TestSeveralAdd(t *testing.T) {
 	tokens, err := goeval.ParseExpression("1 + 4 + 5 + 6")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": a,
 	})
 
-	if answer != 16.0 {
-		t.Fatal("the answer should be 16")
-	}
+	assert.Equal(t, 16.0, answer)
 }
 
 func TestSeveralMul(t *testing.T) {
@@ -66,9 +63,9 @@ func TestSeveralMul(t *testing.T) {
 	tokens, err := goeval.ParseExpression("1 * 2 * 3 * 4")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": a,
 	})
@@ -83,9 +80,10 @@ func TestComplexGroup(t *testing.T) {
 	tokens, err := goeval.ParseExpression("1 + 2 * (3 * (1 + 1))")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": a,
 	})
@@ -100,9 +98,9 @@ func TestCmp(t *testing.T) {
 	tokens, err := goeval.ParseExpression("0 + 1 > 3")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": a,
 	})
@@ -112,13 +110,30 @@ func TestCmp(t *testing.T) {
 	}
 }
 
+func TestMultipleGroups(t *testing.T) {
+	a := &A{Data: "aaa", BB: B{C: 10}}
+	tokens, err := goeval.ParseExpression("a.Test(8) > 7")
+	assert.NoError(t, err)
+
+	root, err := goeval.BuildTree(tokens)
+
+	assert.NoError(t, err)
+
+	answer := root.Execute(map[string]interface{}{
+		"a": a,
+	})
+
+	assert.Equal(t, 1.0, answer)
+}
+
 func TestCmpObj(t *testing.T) {
 	tokens, err := goeval.ParseExpression("((a + 2) > 3)")
 	assert.NoError(t, err)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": 2,
 	})
@@ -131,10 +146,12 @@ func TestCmpObj(t *testing.T) {
 func TestCmpFunc(t *testing.T) {
 	tokens, err := goeval.ParseExpression("((a.Test(2) + 2) > 3)")
 	assert.NoError(t, err)
+	assert.Len(t, tokens, 14)
 
-	root := goeval.BuildTree(tokens)
-	fmt.Println("tokens=", tokens, root)
-	root.PrintTree(0)
+	root, err := goeval.BuildTree(tokens)
+
+	assert.NoError(t, err)
+
 	answer := root.Execute(map[string]interface{}{
 		"a": &A{},
 	})
@@ -144,7 +161,57 @@ func TestCmpFunc(t *testing.T) {
 	}
 }
 
-func TestParseExpression_InvalidCases(t *testing.T) {
+func TestNotCompleteExpr(t *testing.T) {
+	tokens, err := goeval.ParseExpression("5+")
+	assert.NoError(t, err)
+	assert.Len(t, tokens, 2)
+
+	root, err := goeval.BuildTree(tokens)
+	assert.Nil(t, root)
+}
+
+func TestParseLen(t *testing.T) {
+	tokens, err := goeval.ParseExpression("((a.Test(2) + 2) > 3)")
+	assert.NoError(t, err)
+	assert.Len(t, tokens, 14)
+
+	tests := []struct {
+		grouping  bool
+		number    bool
+		name      bool
+		dot       bool
+		comma     bool
+		operation bool
+		cmp       bool
+	}{
+		{grouping: true},
+		{grouping: true},
+		{name: true},
+		{dot: true},
+		{name: true},
+		{grouping: true},
+		{number: true},
+		{grouping: true},
+		{operation: true},
+		{number: true},
+		{grouping: true},
+		{cmp: true},
+		{number: true},
+		{grouping: true},
+	}
+
+	for ix, token := range tokens {
+		assert.Equal(t, token.IsCMP(), tests[ix].cmp)
+		assert.Equal(t, token.IsOP(), tests[ix].operation)
+		assert.Equal(t, token.IsComma(), tests[ix].comma)
+		assert.Equal(t, token.IsDot(), tests[ix].dot)
+		assert.Equal(t, token.IsNum(), tests[ix].number)
+		assert.Equal(t, token.IsName(), tests[ix].name)
+		assert.Equal(t, token.IsGrouping(), tests[ix].grouping)
+	}
+}
+
+func TestParseExpression_Cases(t *testing.T) {
 	type args struct {
 		e string
 	}

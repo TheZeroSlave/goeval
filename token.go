@@ -3,15 +3,26 @@ package goeval
 type TokenList []Token
 
 type Token struct {
-	data      string
-	operation bool
-	cmp       bool
-	number    bool
-	name      bool
+	data   string
+	cmp    bool
+	number bool
+	name   bool
 }
 
 func (t Token) Data() string {
 	return t.data
+}
+
+func (t Token) IsOP() bool {
+	return t.data == "+" || t.data == "*" || t.data == "/" || t.data == "-"
+}
+
+func (t Token) IsName() bool {
+	return t.name
+}
+
+func (t Token) IsCMP() bool {
+	return t.cmp
 }
 
 func (t Token) IsNum() bool {
